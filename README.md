@@ -393,7 +393,7 @@ ibt-ggateway-capstone-healthcare/
 | Member | Role |
 |--------|------|
 | **Ahmad Assi** | Project Coordinator + Data Lead + Deep Learning |
-| **Bisan Ghoul** | EDA & Visualization Lead |
+| **Bisan Ghoul** | EDA, Feature Engineering & Preprocessing + LightGBM Modeling (Tuning, Threshold & SHAP) |
 | **Roa'a Jaber** | Modeling Lead + Streamlit Demo + Deep Learning |
 | **Mohammad Zyoud** | Modeling Lead + Deep Learning |
 | **Roaa Abu Arra** | Documentation + Slides Lead + Power BI |
