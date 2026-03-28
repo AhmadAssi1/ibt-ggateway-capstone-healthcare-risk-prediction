@@ -252,6 +252,151 @@ Physiologically impossible values replaced with training-set median:
 
 ---
 
+## 🔬 Step 5b — LightGBM: Detailed Modeling Strategy
+
+### Class Imbalance Strategies Compared
+
+Three approaches were tested for handling the 436:1 imbalance in LightGBM specifically:
+
+| Strategy | How it works | Result | Decision |
+|----------|-------------|--------|----------|
+| `is_unbalance=True` | LightGBM auto-weights by class frequency | AUPRC: 0.0084 | ⚠️ Similar to manual weight — less control |
+| `scale_pos_weight=436.9` | Manual ratio of negatives to positives | AUPRC: 0.0084 | ✅ Kept — explicit, tunable |
+| No weighting | Standard training | AUPRC: 0.0087 | ❌ Dropped — 0% recall at default threshold |
+| SMOTE | Synthetic minority oversampling | Not pursued | ❌ See reasoning below |
+
+**Why SMOTE was not used for LightGBM:**
+- With only 250 positive training rows, SMOTE's k=5 neighbours are unreliable — synthetic examples are interpolated between very few real cases, producing clinically implausible patterns
+- The Springer (2024) review found SMOTE consistently introduces calibration drift on severely imbalanced medical data
+- Cost-sensitive learning (`scale_pos_weight`) achieved comparable or better AUPRC without modifying the training distribution
+- SMOTE was tested on Random Forest and XGBoost — it helped RF slightly (AUPRC 0.0040 vs 0.0031) but hurt XGBoost (recall dropped from 17% to 4%)
+
+---
+
+### Hyperparameter Tuning — Optuna Bayesian Optimisation
+
+**Why Optuna over Grid Search:**
+Grid search evaluates every parameter combination exhaustively — with 9 parameters and reasonable ranges, this would require thousands of evaluations. Optuna uses the **Tree Parzen Estimator (TPE)** algorithm: it learns which parameter regions are promising and focuses trials there. 50 Optuna trials typically outperforms 500 random search trials.
+
+**Parameters tuned and why each matters:**
+
+| Parameter | Search Range | Why it matters for imbalance |
+|-----------|-------------|------------------------------|
+| `scale_pos_weight` | 50–1000 (log scale) | **Key addition** — lets Optuna find the optimal minority class penalty rather than fixing it at 436.9 |
+| `learning_rate` | 0.001–0.1 (log scale) | Lower rates generalise better on rare events — model takes more careful steps |
+| `n_estimators` | 200–1000 | More trees needed when learning rate is low |
+| `num_leaves` | 20–100 | Controls tree complexity — too many = overfitting on the 250 positive rows |
+| `min_child_samples` | 20–200 | **Critical** — prevents leaf nodes built around individual positive rows |
+| `max_depth` | 3–10 | Caps tree depth — shallower trees generalise better for rare events |
+| `subsample` | 0.5–1.0 | Row subsampling — adds randomness, reduces overfitting |
+| `colsample_bytree` | 0.5–1.0 | Feature subsampling per tree — most impactful parameter found by Optuna |
+| `reg_alpha` | 1e-4–10 (log scale) | L1 regularisation |
+| `reg_lambda` | 1e-4–10 (log scale) | L2 regularisation |
+
+**Best parameters found:**
+
+| Parameter | Value | Interpretation |
+|-----------|-------|----------------|
+| `scale_pos_weight` | 191.9 | Lower than computed 436.9 — full ratio over-penalises, hurting precision |
+| `learning_rate` | 0.013 | Slow — careful steps needed with only 250 positive rows |
+| `min_child_samples` | 57 | High — prevents memorising individual positive patients |
+| `colsample_bytree` | 0.81 | Ranked most important by Optuna — feature subsampling key to generalisation |
+
+---
+
+### Cross-Validation — The Patient Leakage Problem
+
+**What went wrong first:**
+
+Using standard `StratifiedKFold` (row-level splits), CV AUPRC reached **0.39** — a result that looked excellent. When the model was evaluated on the held-out test set, AUPRC collapsed to **0.002**.
+
+**Why this happened:**
+
+Each patient contributes ~55 rows (109,474 rows ÷ 1,995 patients). Row-level CV splits these rows across folds, so the same patient's hour-3 data appears in the training fold while their hour-7 data appears in the validation fold. The model memorises patient-specific patterns and then "recognises" that patient in validation — producing an inflated score that does not generalise to new patients.
+
+**The fix — `StratifiedGroupKFold`:**
+```python
+cv = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=42)
+for train_idx, val_idx in cv.split(X_train, y_flat, groups=train_patient_ids):
+    # all rows from a patient stay in the same fold
+```
+
+With patient ID as the group key, all rows from a patient go entirely into either the training or validation fold — never both. CV AUPRC dropped to an honest **0.011**, which closely matched the test result of **0.0029**.
+
+| CV Method | CV AUPRC | Test AUPRC | Gap | Verdict |
+|-----------|----------|------------|-----|---------|
+| `StratifiedKFold` (row-level) | 0.3925 | 0.0020 | 35× | ❌ Leakage |
+| `StratifiedGroupKFold` (patient-level) | 0.0110 | 0.0029 | 3.8× | ✅ Honest |
+
+> This finding is the most important methodological result of the LightGBM work. Any dataset with repeated measurements per subject — ICU data, wearables, longitudinal health records — requires group-aware cross-validation.
+
+---
+
+### Threshold Analysis
+
+**Why the default threshold (0.5) fails here:**
+
+With 0.18% positive rate, the model's predicted probabilities for danger hours cluster far below 0.5 — even when the model correctly identifies them. Using 0.5 as the decision boundary predicts safe for every single row, catching zero patients.
+
+**How the optimal threshold was found:**
+
+The F2 score weights recall twice as heavily as precision, reflecting the clinical reality that a missed ventilation event is more dangerous than a false alarm:
+```
+F2 = (5 × Precision × Recall) / (4 × Precision + Recall)
+```
+
+**Results at F2-optimal threshold (0.098):**
+
+| Metric | Value |
+|--------|-------|
+| Threshold | 0.098 (vs default 0.5) |
+| Recall | 20.8% — 10 of 48 danger hours caught |
+| Precision | 0.5% |
+| False alarms per true catch | 201 |
+| True positives | 10 |
+| False negatives (missed) | 38 |
+
+**Clinically targeted thresholds:**
+
+| Recall target | Threshold | Precision | False alarm rate |
+|---------------|-----------|-----------|-----------------|
+| 40% | 0.0079 | 0.3% | 99.7% |
+| 50% | 0.0079 | 0.3% | 99.7% |
+| 60% | 0.0028 | 0.2% | 99.8% |
+| 70% | 0.0028 | 0.2% | 99.8% |
+| 80% | 0.0024 | 0.2% | 99.8% |
+
+> The high false alarm rate across all thresholds reflects the fundamental sample size constraint — 48 test positives in 27,393 rows. On the full eICU dataset, precision at equivalent recall targets would be substantially higher.
+
+---
+
+### Feature Importance — Three Methods Compared
+
+Running three importance methods guards against the blind spots of any single approach:
+
+| Method | What it measures | Key limitation |
+|--------|-----------------|----------------|
+| LightGBM gain | Total loss reduction from splits on that feature | Biased toward features that appear in many rows (e.g. static demographics) |
+| Permutation importance | Drop in AUPRC when feature is randomly shuffled | Honest for our actual metric — computationally expensive |
+| SHAP | Directional contribution per prediction | Most interpretable — shows sign and magnitude of effect |
+
+**Key finding — gain importance was misleading:**
+
+| Feature | Gain rank | Permutation rank | Verdict |
+|---------|-----------|-----------------|---------|
+| `age` | 2nd | 31st | ❌ Artifact — static feature exploiting row ubiquity |
+| `admissionweight` | 1st | 23rd | ❌ Artifact — same reason |
+| `respiration_mean_3h` | 3rd | **1st** | ✅ True predictor |
+| `heartrate_mean_3h` | 4th | **2nd** | ✅ True predictor |
+| `fio2_missing` | 18th | **5th** | ✅ Missingness is a genuine signal |
+
+**SHAP direction (from beeswarm plot):**
+- High `heartrate_mean_3h` → pushes toward danger ✅ clinically correct
+- High `respiration_mean_3h` → pushes toward danger ✅ clinically correct
+- High `fio2_last` → pushes toward danger ✅ higher oxygen demand = risk
+- Low `sao2_mean_3h` → pushes toward danger ✅ dropping SpO2 = risk
+---
+
 ## 🤖 Step 6 — Model Development
 
 ### Model 1 — Logistic Regression (Baseline)
