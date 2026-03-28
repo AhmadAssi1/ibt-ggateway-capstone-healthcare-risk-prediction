@@ -465,6 +465,19 @@ Running three importance methods guards against the blind spots of any single ap
 
 ---
 
+## 📄 Research Basis — Imbalanced Medical ML
+
+The LightGBM modeling approach was informed by two key papers:
+
+| Paper | Key finding applied |
+|-------|-------------------|
+| **Springer (2024)** — Systematic review of imbalanced classification methods on medical data | LightGBM with cost-sensitive learning consistently outperforms SMOTE variants on severely imbalanced clinical data. AUPRC is the correct metric — accuracy and AUC-ROC are misleading at <1% positive rates. Applying imbalance correction before splitting is identified as the most common fatal mistake |
+| **PLOS ONE (2025)** — Instance selection vs oversampling for imbalanced eICU data | Instance selection and group-aware evaluation outperform SMOTE by finding better decision boundaries rather than generating synthetic data. Patient-level group constraints in CV are mandatory for repeated-measurement medical datasets |
+
+Both papers report LightGBM achieving AUPRC of **~0.63** on the full eICU dataset (~200,000 patients). Our pipeline is methodologically identical — the gap in results is entirely explained by the 80× smaller demo dataset (2,494 patients).
+
+---
+
 ## 📊 Power BI Dashboard
 
 An interactive **Power BI dashboard** was built on the engineered 136,867-row hourly patient grid. It provides three views:
