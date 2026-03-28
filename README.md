@@ -400,37 +400,83 @@ Running three importance methods guards against the blind spots of any single ap
 ## 🤖 Step 6 — Model Development
 
 ### Model 1 — Logistic Regression (Baseline)
-- **Purpose:** Establish performance floor, confirm preprocessing is correct
-- **Algorithm:** Ordinary Least Squares — assumes linear separability
-- **Result:** AUPRC: 0.0015 | AUROC: 0.400 | Recall: 71% | F1: 0.00
-- **Finding:** High recall achieved by predicting positive too liberally — clinically impractical
+- **Algorithm:** Logistic loss with L2 regularisation — assumes linear separability
+- **Imbalance strategy:** `class_weight='balanced'` — re-weights the loss function to penalise missing a positive case proportionally to the 436:1 imbalance
+- **Tuning:** No hyperparameter tuning applied — used as a performance floor baseline
+- **Threshold analysis:** Default threshold (0.5) yields 10% recall. F1-optimal threshold found at **0.391** — recall rises to 71% but precision collapses to ~0%, producing 201+ false alarms per true catch
+- **Feature importance:** Logistic regression coefficients used as importance proxy. Top predictors: `heartrate_mean_3h`, `respiration_mean_3h`, `fio2_last` — real-time signals ranked highest, consistent with clinical expectations. `age` also ranked high (coefficient 0.21) — consistent with the artifact pattern seen across all models
+- **Result:** AUPRC: 0.0015 | AUROC: 0.400 | Recall: 71% at F1-optimal threshold | F1: 0.00
+- **Finding:** High recall is misleading — achieved by predicting positive too liberally. Precision is effectively 0%, making this clinically impractical. Confirms that a linear decision boundary cannot capture the complex interaction patterns needed for this task
+- **Notebook:** [Logistic Regression Notebook](https://github.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/blob/main/notebooks/Modelling.ipynb)
 
-### Model 2 — Random Forest ⭐ Best Overall
-- **Algorithm:** 100 decision trees, bootstrap sampling, probability averaging
-- **Best Config:** class_weight='balanced_subsample'
-- **Result:** AUPRC: 0.0031 | AUROC: 0.645 | Recall: 50% | F1: 0.011
-- **Finding:** Correctly identifies 50% of all true ventilation risk windows 6–12h in advance
+
+### Model 2 — Random Forest
+- **Algorithm:** 100 decision trees, bootstrap sampling, majority vote probability averaging
+- **Imbalance strategy:** Four configurations compared — `class_weight='balanced_subsample'` (baseline), SMOTE, SMOTE+Tomek, ADASYN
+- **Tuning:** No hyperparameter tuning — default sklearn parameters used as a strong non-linear baseline
+- **Threshold analysis:** F1-optimal threshold found at **0.103** for SMOTE/SMOTE+Tomek — consistent across both strategies, reflecting stable probability calibration
+- **Feature importance:** `admissionweight` and `age` ranked 1st and 2nd again — same artifact pattern seen across all models. First genuine real-time signal: `fio2_last` (rank 3), `heartrate_mean_3h` (rank 4)
+- **Oversampling comparison:**
+
+| Strategy | AUPRC | AUROC | Recall | Notes |
+|----------|-------|-------|--------|-------|
+| `class_weight='balanced_subsample'` | 0.0031 | 0.645 | 50% | Strong recall, lower AUPRC |
+| SMOTE | **0.0040** | 0.663 | 31% | ✅ Best AUPRC |
+| SMOTE + Tomek | **0.0040** | 0.663 | 31% | ✅ Identical to SMOTE — Tomek links made no difference |
+| ADASYN | 0.0039 | **0.688** | 31% | Best AUROC — adaptive sampling improves ranking |
+
+- **Result:** Best AUPRC: 0.0040 (SMOTE) | Best AUROC: 0.688 (ADASYN) | Recall: 31% at F1-optimal threshold | F1: 0.014
+- **Finding:** Unlike XGBoost where SMOTE hurt performance, SMOTE improved RF AUPRC from 0.0031 → 0.0040. SMOTE+Tomek added no benefit over plain SMOTE — the Tomek link removal step made no measurable difference at this imbalance level. ADASYN achieved the highest AUROC (0.688) but similar AUPRC to SMOTE. The `balanced_subsample` baseline achieved the highest raw recall (50%) at the cost of lower AUPRC — the right choice depends on whether recall or ranking quality is prioritised clinically
+- **Notebook:** [Random Forest Notebook](https://github.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/blob/main/notebooks/Modelling.ipynb)
+
 
 ### Model 3 — XGBoost
-- **Algorithm:** Sequential gradient boosting — each tree corrects errors of previous
-- **Best Config:** scale_pos_weight=436.9
-- **Result:** AUPRC: 0.0032 | AUROC: 0.632 | Recall: 17% | F1: 0.012
-- **Finding:** SMOTE hurt XGBoost — recall dropped from 17% to 4% with basic SMOTE
+- **Algorithm:** Sequential gradient boosting — each tree corrects the errors of the previous one
+- **Imbalance strategy:** `scale_pos_weight=436.9` as primary strategy — four configurations compared (base, SMOTE, SMOTE+Tomek, ADASYN)
+- **Tuning:** Early stopping on AUPRC — best iteration found at tree 18 out of 48, indicating the model plateaus quickly on this dataset size
+- **Threshold analysis:** Default threshold (0.5) yields 17% recall. F1-optimal threshold found at **0.568** — higher than other models, reflecting XGBoost's probability calibration difference
+- **Feature importance:** `unittype_MICU` and `unittype_CCU-CTICU` ranked 1st and 2nd — ICU unit type dominating over real-time vitals, similar artifact pattern to LR and RF. `respiration_last` was the highest-ranked real-time signal (rank 3)
+- **Oversampling comparison:**
 
-### Model 4 — LightGBM
+| Strategy | AUPRC | AUROC | Recall | Notes |
+|----------|-------|-------|--------|-------|
+| `scale_pos_weight=436.9` | 0.0032 | 0.632 | 17% | Best recall |
+| SMOTE | 0.0030 | 0.590 | 4% | ❌ Hurt recall significantly |
+| SMOTE + Tomek | 0.0030 | 0.590 | 4% | ❌ No improvement over SMOTE |
+| ADASYN | **0.0043** | **0.636** | 27% | ✅ Best AUPRC — adaptive sampling helps |
+
+- **Result:** AUPRC: 0.0032 | AUROC: 0.632 | Recall: 17% at F1-optimal threshold | F1: 0.012
+- **Finding:** SMOTE and SMOTE+Tomek both hurt XGBoost — recall dropped from 17% to 4%. ADASYN was the exception, achieving the highest AUPRC (0.0043) and recall (27%) of any XGBoost configuration by focusing synthetic examples on harder-to-classify positives. Cost-sensitive learning (`scale_pos_weight`) remains the most reliable strategy for this dataset
+- **Notebook:** [XGBoost Notebook](https://github.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/blob/main/notebooks/Modelling.ipynb)
+
+  ### Model 4 — LightGBM
 - **Algorithm:** Histogram-based leaf-wise tree growth (Microsoft)
-- **Best Config:** Optuna Bayesian tuning (50 trials) + Effective Number of Samples weighting
-- **Result:** AUPRC: 0.0037 | AUROC: 0.637 | Recall: 23% | F1: 0.014
-- **Finding:** Highest raw AUPRC among non-SMOTE models; static demographics dominated importance
+- **Imbalance strategy:** Cost-sensitive learning via `scale_pos_weight` — three configurations compared (auto-weighted, manual 436.9, no weighting). SMOTE not applied — with only 250 positive rows, synthetic interpolation between so few real cases produces clinically implausible patterns
+- **Tuning:** Optuna Bayesian optimisation (50 trials, TPE sampler) — `scale_pos_weight` included in the search space alongside learning rate, tree depth, regularisation, and subsampling parameters. Best `scale_pos_weight` found at **191.9** — lower than the computed 436.9, confirming the full ratio over-penalises and hurts precision
+- **Cross-validation:** `StratifiedGroupKFold` with patient ID as the group key — critical for preventing patient leakage in time-series data. Row-level `StratifiedKFold` inflated CV AUPRC to **0.39** (35× overestimate); group-aware CV corrected this to **0.011**
+- **Threshold analysis:** Default threshold of 0.5 catches zero patients at 0.18% positive rate. F2-optimal threshold found at **0.098** — catches 21% recall at 201 false alarms per true catch. Clinically targeted thresholds computed at 40–80% recall targets
+- **Feature importance:** Three methods compared — LightGBM gain, permutation importance on AUPRC, and SHAP. Gain importance was misleading: `age` and `admissionweight` ranked 1st/2nd by gain but 31st/23rd by permutation — confirmed as artifacts, consistent with the same pattern seen in LR, RF, and XGBoost. True top predictors: `respiration_mean_3h` (rank 1) and `heartrate_mean_3h` (rank 2)
+- **Result:** Test AUPRC: 0.0029 | CV AUPRC: 0.011 | AUROC: 0.627 | Recall: 21% at F2-optimal threshold
+- **Finding:** Patient leakage in cross-validation is the most dangerous methodological mistake in ICU ML — discovered and corrected during this work. The dominance of static demographic features (`age`, `admissionweight`) across all four models confirms these are dataset-level artifacts, not genuine predictors of hourly deterioration
+- **Notebook:** [LightGBM — Hyperparameter Tuning, Threshold Analysis & SHAP](https://github.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/blob/main/notebooks/LightGBM_%E2%80%94_Hyperparameter_Tuning%2C_Threshold_Analysis_%26_SHAP.ipynb)
 
 ### Model 5 — Deep Learning (Stacked LSTM + BiLSTM)
-- **Architecture:** Stacked LSTM(128→32) and Bidirectional LSTM(256→64) via TensorFlow/Keras
-- **Tuning:** keras_tuner RandomSearch (10 trials, EarlyStopping patience=3)
-- **Stacked LSTM Result:** AUPRC: 0.0030 | AUROC: 0.503 | Recall: 0%
-- **BiLSTM Result:** AUPRC: 0.0026 | AUROC: 0.538 | Recall: 0%
-- **Finding:** seq_len=1 means no real sequences fed to LSTM layers — requires seq_len ≥ 12 to exploit temporal memory
+- **Architecture:**
+  - **Stacked LSTM:** LSTM(128) → Dropout(0.1) → LSTM(32) → Dropout(0.4) → Dense(1, sigmoid)
+  - **BiLSTM:** Bidirectional(LSTM(128)) → Dropout(0.1) → Bidirectional(LSTM(32)) → Dropout(0.4) → Dense(1, sigmoid)
+- **Input shape:** `(109474, 31)` reshaped to `(1, 31)` — treating 31 features as a single timestep
+- **Tuning:** keras_tuner RandomSearch (10 trials, EarlyStopping patience=3) on validation loss
+- **Best hyperparameters (both models):** units_1=128, units_2=32, dropout_1=0.1, dropout_2=0.4, optimizer=adam
+- **Training:** Up to 30 epochs with early stopping — Stacked LSTM stopped at epoch 12, BiLSTM stopped at epoch 8
 
----
+| Model | AUPRC | AUROC | Recall | Notes |
+|-------|-------|-------|--------|-------|
+| Stacked LSTM | 0.0030 | 0.5027 | 0% | AUROC near random — no true learning |
+| BiLSTM | 0.0026 | 0.5377 | 0% | Slightly better AUROC but still near random |
+
+- **Result:** Both models achieve 0% recall — they predict safe for every row
+- **Finding:** `seq_len=1` means no real sequence is fed to the LSTM layers. With a single timestep, the LSTM has no temporal context to learn from — it behaves like a dense layer without memory. To exploit LSTM temporal memory, `seq_len ≥ 12` would be needed, requiring a full sequence of hourly readings per patient rather than a single flattened feature vector. This is a fundamental architecture mismatch, not a hyperparameter problem
+- **Notebook:** [LSTM Models](https://github.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/tree/main/notebooks/LSTM%20models)
 
 ## 📈 Step 7 — Evaluation & Results
 
@@ -441,12 +487,16 @@ Running three importance methods guards against the blind spots of any single ap
 |-------|----------|-------|-------|--------|-----|
 | Logistic Regression | class_weight=balanced | 0.0015 | 0.400 | 71% | 0.00 |
 | XGBoost | scale_pos_weight=436.9 | 0.0032 | 0.632 | 17% | 0.012 |
-| XGBoost | ADASYN | 0.0030 | 0.590 | 27% | 0.020 |
+| XGBoost | ADASYN | **0.0043** | 0.636 | 27% | 0.022 |
 | **Random Forest** | **class_weight=balanced_sub.** | **0.0031** | **0.645** | **50%** | **0.011** |
-| Random Forest | SMOTE | 0.0040 | 0.663 | 31% | 0.014 |
-| LightGBM | Eff. Sampling + Optuna | 0.0037 | 0.637 | 23% | 0.014 |
+| Random Forest | SMOTE | **0.0040** | 0.663 | 31% | 0.014 |
+| Random Forest | ADASYN | 0.0039 | **0.688** | 31% | 0.011 |
+| Random Forest | class_weight=balanced_subsample | 0.0031 | 0.645 | 50% | 0.011 |
+| LightGBM | Optuna + StratifiedGroupKFold (CV AUPRC: 0.011) | 0.0029 | 0.627 | 21%* | 0.010 |
 | Stacked LSTM | RandomSearch, seq_len=1 | 0.0030 | 0.503 | 0% | 0.00 |
 | Bidirectional LSTM | RandomSearch, seq_len=1 | 0.0026 | 0.538 | 0% | 0.00 |
+
+*Recall at F2-optimal threshold (0.098) — default threshold of 0.5 catches 0 patients at this imbalance level.
 
 ### Top 10 Feature Importances
 
