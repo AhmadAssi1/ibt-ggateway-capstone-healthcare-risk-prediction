@@ -536,10 +536,10 @@ ibt-ggateway-capstone-healthcare/
 
 | Priority | Area | Action |
 |----------|------|--------|
-| High | Feature Windows | Extend rolling windows from 3h to 6h and 12h |
 | High | Vital Trends | Add SpO2 and HR deterioration slope over 6h and 12h |
 | High | Interaction Features | Combined signals: low SpO2 + high RR, rising FiO2 + rising HR |
-| Medium | SHAP | Individual patient explanations for clinical use |
+| High | LightGBM — full eICU | Re-run tuned pipeline on full eICU — expected AUPRC 0.3–0.6 based on literature |
+| Medium | Drop age/admissionweight | Confirmed artifacts by permutation importance — will improve real-time signal ranking |
 | Medium | External Validation | Test on MIMIC-IV for generalizability |
 | Long-term | LSTM Sequences | seq_len ≥ 12 with MIMIC-IV (100,000+ ICU stays) |
 | Long-term | LLM Integration | Clinical notes via large language model embeddings |
