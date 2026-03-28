@@ -571,6 +571,8 @@ ibt-ggateway-capstone-healthcare/
 6. Chawla et al. (2002) — SMOTE, *JAIR*
 7. Lundberg & Lee (2017) — SHAP, *NeurIPS*
 8. PhysioNet eICU-CRD v2.0 — physionet.org
+9. Springer (2024) — Systematic review of imbalanced classification methods for medical data
+10. PLOS ONE (2025) — Instance selection vs oversampling for imbalanced eICU classification
 
 ---
 
