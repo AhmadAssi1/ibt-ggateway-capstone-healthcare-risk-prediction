@@ -302,6 +302,8 @@ Grid search evaluates every parameter combination exhaustively — with 9 parame
 | `min_child_samples` | 57 | High — prevents memorising individual positive patients |
 | `colsample_bytree` | 0.81 | Ranked most important by Optuna — feature subsampling key to generalisation |
 
+![Optuna Trial History](Charts/LightGBM/Optun%20trial%20history.png)
+
 ---
 
 ### Cross-Validation — The Patient Leakage Problem
@@ -368,6 +370,8 @@ F2 = (5 × Precision × Recall) / (4 × Precision + Recall)
 
 > The high false alarm rate across all thresholds reflects the fundamental sample size constraint — 48 test positives in 27,393 rows. On the full eICU dataset, precision at equivalent recall targets would be substantially higher.
 
+![Threshold Analysis](https://raw.githubusercontent.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/main/Charts/LightGBM/threshold%20analysis%20lighgbm.png)
+
 ---
 
 ### Feature Importance — Three Methods Compared
@@ -395,6 +399,11 @@ Running three importance methods guards against the blind spots of any single ap
 - High `respiration_mean_3h` → pushes toward danger ✅ clinically correct
 - High `fio2_last` → pushes toward danger ✅ higher oxygen demand = risk
 - Low `sao2_mean_3h` → pushes toward danger ✅ dropping SpO2 = risk
+
+| LightGBM Gain | Permutation | SHAP |
+|:---:|:---:|:---:|
+| ![Gain](https://raw.githubusercontent.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/main/Charts/LightGBM/LightGBM_gain.png) | ![Permutation](https://raw.githubusercontent.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/main/Charts/LightGBM/permutatuin_importance_lightgbm.png) | ![SHAP](https://raw.githubusercontent.com/AhmadAssi1/ibt-ggateway-capstone-healthcare-risk-prediction/main/Charts/LightGBM/SHAP1_lightGBM.png) |
+
 ---
 
 ## 🤖 Step 6 — Model Development
